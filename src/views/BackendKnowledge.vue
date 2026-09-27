@@ -9,7 +9,7 @@
       <TableSearch :formItem="formItem" @search="handleSearch" @reset="handleReset"> </TableSearch>
     </div>
     <div class="table-container">
-      <el-table :data="tableData" style="width: 100%; margin-top: 25px">
+      <el-table v-loading="tableLoading" :data="tableData" empty-text="暂无知识文章" style="width: 100%; margin-top: 25px">
         <el-table-column fixed="left" label="文章标题" width="375px">
           <template #default="scope">
             <div style="display: flex; align-items: center">
@@ -54,6 +54,13 @@
           </template>
         </el-table-column>
       </el-table>
+      <DataState
+        :loading="tableLoading"
+        :error="tableError"
+        :empty="!tableLoading && !tableError && tableData.length === 0"
+        empty-text="暂无知识文章"
+        @retry="handleSearch(lastSearchParams)"
+      />
       <el-pagination
         layout=" total, prev, pager, next, jumper"
         :total="pagination.total"
@@ -77,6 +84,7 @@ import { onMounted, ref, reactive } from "vue";
 // 导入自定义组件
 import ContentHead from "@/components/ContentHead.vue";
 import TableSearch from "@/components/TableSearch.vue";
+import DataState from "@/components/DataState.vue";
 // 导入 API 接口
 import {
   categoryTree,
@@ -137,6 +145,9 @@ const pagination = reactive({
  * 使用 ref 创建响应式数组
  */
 const tableData = ref([]);
+const tableLoading = ref(false);
+const tableError = ref(false);
+const lastSearchParams = ref({});
 
 /**
  * 分类列表数据（用于新增弹窗）
@@ -147,7 +158,10 @@ const categories = ref([]);
  * 搜索处理函数
  * @param {Object} formData - 表单数据
  */
-const handleSearch = async (formData) => {
+const handleSearch = async (formData = lastSearchParams.value) => {
+  lastSearchParams.value = { ...(formData || {}) };
+  tableLoading.value = true;
+  tableError.value = false;
   // console.log(formData, "查询参数");
   console.log(pagination, "分页参数");
   const params = {
@@ -167,6 +181,9 @@ const handleSearch = async (formData) => {
     console.error("获取文章列表失败:", error);
     tableData.value = [];
     pagination.total = 0;
+    tableError.value = true;
+  } finally {
+    tableLoading.value = false;
   }
 };
 
@@ -240,7 +257,7 @@ const handlePublish = (row) => {
       changeArticleStatus(row.id, { status: 1 })
         .then(() => {
           ElMessage.success("发布成功");
-          handleSearch({});
+          handleSearch(lastSearchParams.value);
         })
         .catch((err) => {
           ElMessage.error(err || "发布失败");
@@ -261,7 +278,7 @@ const handleOffline = (row) => {
       changeArticleStatus(row.id, { status: 2 })
         .then(() => {
           ElMessage.success("下线成功");
-          handleSearch({});
+          handleSearch(lastSearchParams.value);
         })
         .catch((err) => {
           ElMessage.error(err || "下线失败");
@@ -281,7 +298,7 @@ const handleDelete = (row) => {
       articleDelete(row.id)
         .then(() => {
           ElMessage.success("删除成功");
-          handleSearch({});
+          handleSearch(lastSearchParams.value);
         })
         .catch((err) => {
           ElMessage.error(err || "删除失败");

@@ -32,7 +32,8 @@
 </template>
 
 <script setup lang="js">
-import { ref, reactive, computed } from "vue";
+import { ref, reactive, computed, onBeforeUnmount } from "vue";
+import { useDebounceFn } from "@/utils/debounce";
 
 const emit = defineEmits(["search", "reset"]);
 
@@ -61,13 +62,22 @@ const isComponent = (comp) => {
   }[comp];
 };
 
+const emitSearch = useDebounceFn((data) => {
+  emit("search", { ...data });
+}, 300);
+
 const handleSearch = () => {
-  emit("search", formData);
+  emitSearch(formData);
 };
 
 const handleReset = (formEl) => {
   if (!formEl) return;
+  emitSearch.cancel();
   formEl.resetFields();
-  emit("reset", formData);
+  emit("reset", { ...formData });
 };
+
+onBeforeUnmount(() => {
+  emitSearch.cancel();
+});
 </script>

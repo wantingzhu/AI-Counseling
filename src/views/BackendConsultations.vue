@@ -1,7 +1,7 @@
 <template>
   <div class="consultations-page">
     <ContentHead title="咨询记录"></ContentHead>
-    <el-table :data="tableData" style="width: 100%">
+    <el-table v-loading="tableLoading" :data="tableData" empty-text="暂无咨询记录" style="width: 100%">
       <el-table-column label="回话ID" width="100">
         <template #default="scope">
           <el-avatar :size="40">{{ scope.row.userNickname }}</el-avatar>
@@ -22,10 +22,17 @@
         </template>
       </el-table-column>
     </el-table>
+    <DataState
+      :loading="tableLoading"
+      :error="tableError"
+      :empty="!tableLoading && !tableError && tableData.length === 0"
+      empty-text="暂无咨询记录"
+      @retry="handleSearch"
+    />
     <el-pagination
       layout=" total, prev, pager, next, jumper"
       :total="pagination.total"
-      :page-size="pagination.size"
+      :page-size="pagination.pageSize"
       v-model:current-page="pagination.currentPage"
       @current-change="handlePageChange"
       style="margin-top: 25px; float: right"
@@ -80,9 +87,12 @@
 <script setup lang="js">
 import { ref, reactive, onMounted } from "vue";
 import ContentHead from "@/components/ContentHead.vue";
+import DataState from "@/components/DataState.vue";
 import { consultationPage, getConsultationDetail } from "@/api/admin";
 
 const tableData = ref([]);
+const tableLoading = ref(false);
+const tableError = ref(false);
 // 分页参数
 const pagination = reactive({
   currentPage: 1,
@@ -94,15 +104,18 @@ const sessionDetail = ref({});
 const sessionMessages = ref([]);
 const loadingMessages = ref(false);
 
-const viewSessionDetail = (row) => {
+const viewSessionDetail = async (row) => {
   loadingMessages.value = true;
   showDetailDialog.value = true;
-  getConsultationDetail(row.id).then((res) => {
-    loadingMessages.value = false;
+  sessionDetail.value = row;
+  sessionMessages.value = [];
+  try {
+    const res = await getConsultationDetail(row.id);
     console.log(res);
     sessionMessages.value = res || [];
-    sessionDetail.value = row;
-  });
+  } finally {
+    loadingMessages.value = false;
+  }
   console.log(row, "row");
 };
 
@@ -111,13 +124,23 @@ const handlePageChange = (val) => {
   handleSearch();
 };
 
-const handleSearch = () => {
-  consultationPage(pagination).then((res) => {
+const handleSearch = async () => {
+  tableLoading.value = true;
+  tableError.value = false;
+  try {
+    const res = await consultationPage(pagination);
     console.log(res, "咨询记录响应");
     const { records, total } = res || {};
     tableData.value = records || [];
     pagination.total = total || 0;
-  });
+  } catch (error) {
+    console.error("获取咨询记录失败:", error);
+    tableData.value = [];
+    pagination.total = 0;
+    tableError.value = true;
+  } finally {
+    tableLoading.value = false;
+  }
 };
 
 // 详情弹窗

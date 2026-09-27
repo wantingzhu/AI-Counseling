@@ -5,7 +5,7 @@
       <TableSearch :formItem="formItem" @search="handleSearch" @reset="handleReset" />
     </div>
     <div class="table-container">
-      <el-table :data="tableData" style="width: 100%">
+      <el-table v-loading="tableLoading" :data="tableData" empty-text="暂无情绪日志" style="width: 100%">
         <el-table-column label="ID" width="80" prop="id" />
         <el-table-column label="会话ID" width="130">
           <template #default="scope">
@@ -33,6 +33,13 @@
           </template>
         </el-table-column>
       </el-table>
+      <DataState
+        :loading="tableLoading"
+        :error="tableError"
+        :empty="!tableLoading && !tableError && tableData.length === 0"
+        empty-text="暂无情绪日志"
+        @retry="handleSearch(lastSearchParams)"
+      />
     </div>
     <EmotionDialog
       v-model:modelValue="dialogVisible"
@@ -45,6 +52,7 @@
 import { ref, reactive, onMounted } from "vue";
 import ContentHead from "@/components/ContentHead.vue";
 import TableSearch from "@/components/TableSearch.vue";
+import DataState from "@/components/DataState.vue";
 import EmotionDialog from "@/components/EmotionDialog.vue";
 import { emotionPage, deleteEmotion } from "@/api/admin";
 import { ElMessageBox, ElMessage } from "element-plus";
@@ -73,6 +81,9 @@ const formItem = [
 
 // 列表数据
 const tableData = ref([]);
+const tableLoading = ref(false);
+const tableError = ref(false);
+const lastSearchParams = ref({});
 // 分页参数
 const pagination = reactive({
   currentPage: 1, // 当前页码
@@ -84,7 +95,10 @@ const pagination = reactive({
  * 搜索处理函数
  * @param {Object} formData - 表单数据
  */
-const handleSearch = async (formData) => {
+const handleSearch = async (formData = lastSearchParams.value) => {
+  lastSearchParams.value = { ...(formData || {}) };
+  tableLoading.value = true;
+  tableError.value = false;
   // console.log(formData, "查询参数");
   // console.log(pagination, "分页参数");
   const params = {
@@ -101,9 +115,12 @@ const handleSearch = async (formData) => {
       pagination.total = res.total || 0;
     }
   } catch (error) {
-    console.error("获取文章列表失败:", error);
+    console.error("获取情绪日志失败:", error);
     tableData.value = [];
     pagination.total = 0;
+    tableError.value = true;
+  } finally {
+    tableLoading.value = false;
   }
 };
 /**
@@ -145,7 +162,7 @@ const deleteSession = (row) => {
   }).then(() => {
     deleteEmotion(row.id).then(() => {
       ElMessage.success("删除成功");
-      handleSearch({});
+      handleSearch(lastSearchParams.value);
     });
   });
 };

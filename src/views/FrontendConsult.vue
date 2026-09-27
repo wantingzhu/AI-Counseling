@@ -117,7 +117,7 @@
                 </span>
               </div>
               <div class="session-actions">
-                <el-button text type="danger" size="mini" @click="deleteSession(session.id)">
+                <el-button text type="danger" size="mini" @click.stop="deleteSession(session.id)">
                   <el-icon><DeleteFilled /></el-icon>
                 </el-button>
               </div>
@@ -143,7 +143,7 @@
           </el-icon>
         </el-button>
       </div>
-      <div class="chat-messages">
+      <div class="chat-messages" ref="chatMessagesRef">
         <div class="message-item ai-message" v-if="messageData.length === 0">
           <!-- 默认信息，欢迎用语 -->
           <div class="message-avatar">
@@ -192,7 +192,17 @@
               </div>
               <!-- ai错误提示 -->
               <div v-else-if="msg.isError" class="error-message">
-                {{ msg.content }}
+                <span>{{ msg.content }}</span>
+                <el-button
+                  v-if="msg.retryPayload"
+                  type="primary"
+                  text
+                  size="small"
+                  :disabled="isAiThinking"
+                  @click="retryMessage(msg)"
+                >
+                  重新生成
+                </el-button>
               </div>
               <!-- ai正常回复 -->
               <MarkdownRenderer
@@ -245,7 +255,7 @@
   </div>
 </template>
 <script setup lang="js">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onBeforeUnmount, nextTick } from "vue";
 import {
   createChatSession,
   getSessionList,
@@ -267,6 +277,7 @@ const usersImg = new URL("@/assets/images/users.png", import.meta.url).href;
 
 // 创建新的会话
 const createNewChat = () => {
+  cancelActiveStream();
   // 创建临时会话对象
   const newSession = {
     sessionId: `temp_${Date.now()}`,
@@ -292,6 +303,28 @@ const userInput = ref("");
 const isAiThinking = ref(false);
 // 定义对话消息数据
 const messageData = ref([]);
+const chatMessagesRef = ref(null);
+const currentStreamController = ref(null);
+const activeStreamSessionId = ref(null);
+const lastUserMessage = ref(null);
+
+const scrollToBottom = () => {
+  nextTick(() => {
+    const el = chatMessagesRef.value;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+};
+
+const cancelActiveStream = () => {
+  if (currentStreamController.value) {
+    currentStreamController.value.abort();
+    currentStreamController.value = null;
+  }
+  activeStreamSessionId.value = null;
+  isAiThinking.value = false;
+};
 
 // 情绪花园
 const currentEmotion = ref({
@@ -342,7 +375,7 @@ const getRiskText = (level) => {
 // 定义处理键盘事件
 const handleKeyDown = (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
-    // 处理发送消息逻辑
+    e.preventDefault();
     sendMessage();
   }
 };
@@ -358,6 +391,7 @@ const sendMessage = () => {
   }
 
   const message = userInput.value.trim();
+  lastUserMessage.value = message;
   // 清空用户输入框
   userInput.value = "";
 
@@ -372,6 +406,7 @@ const sendMessage = () => {
       content: message,
       createAt: new Date().toISOString(),
     });
+    scrollToBottom();
     startAiResponse(currentSession.value.sessionId, message);
   }
 };
@@ -420,31 +455,49 @@ const startNewSession = (message) => {
       createdAt: new Date().toISOString(),
     };
     messageData.value.push(userMessage);
+    scrollToBottom();
     // 开始流式对话
     startAiResponse(currentSession.value.sessionId, message);
   });
 };
 
-const startAiResponse = (sessionId, userInput) => {
+const retryMessage = (message) => {
+  if (!message.retryPayload || isAiThinking.value) {
+    return;
+  }
+  message.isError = false;
+  message.content = "";
+  startAiResponse(message.retryPayload.sessionId, message.retryPayload.userInput, message);
+};
+
+const startAiResponse = (sessionId, userInput, existingAiMessage = null) => {
   // 防止重复发送
   if (isAiThinking.value) {
     return ElMessage.warning("AI正在输入中，请稍后再发送");
   }
+  cancelActiveStream();
   // 开始流式对话
   isAiThinking.value = true;
+  activeStreamSessionId.value = sessionId;
 
   // 创建AI消息对象（初始内容为空）
-  const newAiMessage = {
+  const newAiMessage = existingAiMessage || {
     id: `ai_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
     sendType: 2,
     content: "",
     createdAt: new Date().toISOString(),
   };
+  newAiMessage.isError = false;
+  newAiMessage.retryPayload = null;
   // 添加到消息列表
-  messageData.value.push(newAiMessage);
+  if (!existingAiMessage) {
+    messageData.value.push(newAiMessage);
+  }
+  scrollToBottom();
 
   // 调用流式接口获取AI回复
   const controller = new AbortController(); // 用来终止fetch请求
+  currentStreamController.value = controller;
   fetchEventSource("/api/psychological-chat/stream", {
     method: "POST",
     headers: {
@@ -464,6 +517,10 @@ const startAiResponse = (sessionId, userInput) => {
       }
     },
     onmessage: (event) => {
+      if (activeStreamSessionId.value !== sessionId) {
+        controller.abort();
+        return;
+      }
       console.log(event);
       // 处理流式数据
       const raw = event.data.trim();
@@ -471,18 +528,26 @@ const startAiResponse = (sessionId, userInput) => {
         return;
       }
       const eventName = event.event;
-      // 获取当前正在接收的AI消息（消息列表最后一条）
-      const currentAiMessage = messageData.value[messageData.value.length - 1];
-      const payload = JSON.parse(raw);
+      // 绑定当前流式请求对应的 AI 消息，避免会话切换或重试时串流
+      let payload = {};
+      try {
+        payload = JSON.parse(raw);
+      } catch (error) {
+        handleError("AI回复解析失败");
+        return;
+      }
       const ok = String(payload.code);
       if (ok && payload.data && payload.data.content) {
-        currentAiMessage.content += payload.data.content;
+        newAiMessage.content += payload.data.content;
+        scrollToBottom();
       } else if (!ok) {
         // 错误回复提示
         handleError(payload.message || "AI回复失败");
       }
       if (eventName === "done" || payload.isEnd === true) {
         isAiThinking.value = false;
+        currentStreamController.value = null;
+        activeStreamSessionId.value = null;
         controller.abort();
         // 加载情绪分析
         setTimeout(() => {
@@ -490,11 +555,20 @@ const startAiResponse = (sessionId, userInput) => {
         }, 500);
       }
     },
-    onError: (error) => {
-      isAiThinking.value = false;
-      handleError(error.message || "AI回复失败");
+    onerror: (error) => {
+      if (activeStreamSessionId.value === sessionId) {
+        isAiThinking.value = false;
+        currentStreamController.value = null;
+        activeStreamSessionId.value = null;
+        handleError(error.message || "AI回复失败");
+      }
     },
-    onClose: () => {
+    onclose: () => {
+      if (activeStreamSessionId.value !== sessionId) {
+        return;
+      }
+      currentStreamController.value = null;
+      activeStreamSessionId.value = null;
       isAiThinking.value = false;
       // 确保情绪分析被调用
       setTimeout(() => {
@@ -509,6 +583,10 @@ const handleError = (error) => {
   const aiMessage = messageData.value[messageData.value.length - 1];
   if (aiMessage) {
     aiMessage.content = "AI回复失败，请重试";
+    aiMessage.isError = true;
+    aiMessage.retryPayload = currentSession.value
+      ? { sessionId: currentSession.value.sessionId, userInput: lastUserMessage.value }
+      : null;
   }
   isAiThinking.value = false;
   ElMessage.error(error);
@@ -531,6 +609,7 @@ const getSessionPage = () => {
 
 // 选择会话
 const selectSession = (session) => {
+  cancelActiveStream();
   // 调用后端接口获取会话详情
   getChatSessionDetail(session.id).then((res) => {
     console.log("历史会话消息:", res);
@@ -570,6 +649,7 @@ const selectSession = (session) => {
     } else {
       messageData.value = [];
     }
+    scrollToBottom();
   });
   // 加载情绪分析
   loadEmotionAnalysis(session.id);
@@ -646,6 +726,10 @@ onMounted(() => {
   getSessionPage();
   // 创建新会话
   createNewChat();
+});
+
+onBeforeUnmount(() => {
+  cancelActiveStream();
 });
 </script>
 <style scoped lang="scss">

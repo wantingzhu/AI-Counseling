@@ -122,10 +122,11 @@
 </template>
 <script setup lang="js">
 import { getAnalyticsOverview } from "@/api/admin";
-import { onMounted, ref } from "vue";
-import * as mycharts from "echarts";
+import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 
 // import { ElMessage } from "element-plus";
+
+let mycharts = null;
 
 // 统计图片引入
 const usersIconUrl = new URL("@/assets/images/users.png", import.meta.url).href;
@@ -140,7 +141,23 @@ const initChart = () => {
   initEmotionChart();
   initConsultationChart();
   initUserActiveChart();
+  nextTick(resizeCharts);
 };
+const resizeCharts = () => {
+  emotionChart?.resize();
+  consultationChart?.resize();
+  userActiveChart?.resize();
+};
+
+const disposeCharts = () => {
+  emotionChart?.dispose();
+  consultationChart?.dispose();
+  userActiveChart?.dispose();
+  emotionChart = null;
+  consultationChart = null;
+  userActiveChart = null;
+};
+
 // 情绪趋势
 let emotionChart = null;
 const emotionChartRef = ref(null);
@@ -522,12 +539,19 @@ const initUserActiveChart = () => {
   userActiveChart.setOption(option);
 };
 
-onMounted(() => {
+onMounted(async () => {
+  mycharts = await import("echarts");
   getAnalyticsOverview().then((res) => {
     console.log(res, "数据分析");
     analyticsData.value = res || {};
     initChart();
   });
+  window.addEventListener("resize", resizeCharts);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", resizeCharts);
+  disposeCharts();
 });
 </script>
 <style scoped lang="scss">
